@@ -1,0 +1,14 @@
+# ignore the build directory
+build/
+
+# ignore the output directory
+OUT/
+
+# ignore the tarball
+
+*.tgz
+
+# ignore the log files
+
+*.err
+*.out
