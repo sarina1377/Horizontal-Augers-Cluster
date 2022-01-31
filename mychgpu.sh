@@ -33,9 +33,4 @@ srun --mpi=pmi2 ./myclustertest myclustertest.json			# Run the executive
 # you may want to remove the following lines       #
 ####################################################
 
-cd ..                             # Return to the project directory
-tar czvf mychgpu_output.tgz ./OUT # Make a tarball of the output files with compression
-# Move output files to GoogleDrive shared folder. BiGdata is the shared group folder
-# BiGdata:mychgpu will create a new subfolder with the project name "mychgpu"
-rclone copy ./mychgpu_output.tgz BiGdata:mychgpu 
-rm -rf ./OUT mychgpu_output.tgz   # Remove output files
+
