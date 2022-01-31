@@ -15,7 +15,7 @@ cmake_minimum_required(VERSION 3.10)
 # === 1 === 
 # Modify the project name if you want: 
 #--------------------------------------------------------------
-set(MY_PROJECT mychgpu)
+set(MY_PROJECT myclustertest)
 
 project(${MY_PROJECT})
 
@@ -135,7 +135,7 @@ endif()
 # files in your project. 
 #--------------------------------------------------------------
 
-add_executable(${MY_PROJECT} ${MY_PROJECT}.cpp)
+add_executable(${MY_PROJECT} ${myclustertest}.cpp)
 
 #--------------------------------------------------------------
 # Set properties for your executable target
