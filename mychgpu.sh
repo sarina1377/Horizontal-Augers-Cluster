@@ -25,7 +25,7 @@ mkdir build # Make a new directory to host all cmake files
 cd build    # Go to the new build directory
 cmake ..    # Generate Makefiles
 make        # Build the project
-srun --mpi=pmi2 ./mychgpu mychgpu.json			# Run the executive
+srun --mpi=pmi2 ./myclustertest myclustertest.json			# Run the executive
 
 ########################NOTE########################
 # The following is for data archiving purposes     #
