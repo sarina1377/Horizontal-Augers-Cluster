@@ -1,7 +1,6 @@
 // =============================================================================
 // PROJECT CHRONO - http://projectchrono.org
 //
-// Copyright (c) 2019 projectchrono.org
 // All rights reserved.
 //
 // Use of this source code is governed by a BSD-style license that can be found
@@ -9,27 +8,51 @@
 // http://projectchrono.org/license-chrono.txt.
 //
 // =============================================================================
-// Authors: Nic Olsen, Ruochun Zhang
+// Authors: Sarina
 // =============================================================================
-// Chrono::Gpu demo using SMC method. A body whose geometry is described by an
-// OBJ file is time-integrated in Chrono and interacts with a granular wave tank
-// in Chrono::Gpu via the co-simulation framework. The entire simulation consists
-// of 2 runs: the settling phase (which outputs a checkpoint file), and a restarted
-// phase (which load the checkpoint file and then drop the ball, literally).
+// Chrono::Gpu co-simulation using SMC method. Three bodies whose geometries are
+// described by OBJ files are time-integrated in Chrono::Gpu via the
+// co-simulation framework. Three bodies include a posterior part, an anterior
+// part and a tip, which can be a cone or an auger
+// =============================================================================
+// To do lists
+// 1. Calculate void ratio of prepared sample
+// 2. Output particle contact information *Done
+// 3. Output mesh information (force, velocity, etc.) *Done
+// 4. Sample preparation (rain the bottom layer, let it settle; import meshes; rain the top layer, settle)
+// 5. Update to chrono/7.0.0 and no longer need json file as an input
+// 6. Using material based simulation parameters (Young's modulus, Poisson's ratio, etc)
+// 7. Write checkpoint files
 // =============================================================================
 
+/*#include <iostream>
+    using std::cerr;
+    using std::endl;
+#include <fstream>
+    using std::ofstream;
+#include <cstdlib> // for exit function
+  */  // This program output values from an array to a file named example2.dat
+#include <string>     
+#include <sstream> 
 #include <iostream>
-#include <vector>
 #include <string>
+#include <vector>
 
 #include "chrono/core/ChGlobal.h"
-#include "chrono/physics/ChSystemSMC.h"
+#include "chrono/motion_functions/ChFunction.h"
 #include "chrono/physics/ChBody.h"
 #include "chrono/physics/ChForce.h"
+#include "chrono/physics/ChSystemSMC.h"
 #include "chrono/timestepper/ChTimestepper.h"
-#include "chrono/utils/ChUtilsSamplers.h"
 #include "chrono/utils/ChUtilsCreators.h"
-#include "chrono/assets/ChCylinderShape.h"
+#include "chrono/utils/ChUtilsSamplers.h"
+
+#include "chrono/physics/ChLinkMotorLinearForce.h"
+#include "chrono/physics/ChLinkMotorLinearPosition.h"
+#include "chrono/physics/ChLinkMotorLinearSpeed.h"
+#include "chrono/physics/ChLinkMotorRotationAngle.h"
+#include "chrono/physics/ChLinkMotorRotationSpeed.h"
+#include "chrono/physics/ChLinkMotorRotationTorque.h"
 
 #include "chrono_gpu/ChGpuData.h"
 #include "chrono_gpu/physics/ChSystemGpu.h"
@@ -38,37 +61,8 @@
 
 #include "chrono_thirdparty/filesystem/path.h"
 
-//me
-#include "chrono/core/ChQuaternion.h"
-#include "chrono/core/ChVector.h"
-#include "chrono/core/ChCoordsys.h"
-
-#include "chrono/physics/ChSystemNSC.h"
-#include "chrono/physics/ChBodyEasy.h"
-#include "chrono/assets/ChTexture.h"
-#include "chrono/motion_functions/ChFunction_Sine.h"
-#include "chrono/physics/ChLinkMotorLinearPosition.h"
-#include "chrono/physics/ChLinkMotorLinearSpeed.h"
-#include "chrono/physics/ChLinkMotorLinearForce.h"
-#include "chrono/physics/ChLinkMotorLinearDriveline.h"
-#include "chrono/assets/ChColor.h"
-#include "chrono/assets/ChAsset.h"
-#include "chrono/assets/ChColorAsset.h"
-#include "chrono_irrlicht/ChApiIrr.h"
-#include "chrono_irrlicht/ChIrrAppInterface.h"
-#include "chrono_irrlicht/ChIrrAssetConverter.h"
-#include "chrono_irrlicht/ChIrrApp.h"
-#include "chrono/physics/ChLinkMotorRotationSpeed.h"
-
-
 using namespace chrono;
 using namespace chrono::gpu;
-using namespace chrono;
-using namespace chrono::irrlicht;
-
-// Use the main namespaces of Irrlicht
-using namespace irr;
-using namespace irr::core;
 
 
 // Output frequency
@@ -84,7 +78,8 @@ float render_fps = 2000;
 
 
 
-collision::ChCollisionSystemType collision_type = collision::ChCollisionSystemType::BULLET;
+
+//collision::ChCollisionSystemType collision_type = collision::ChCollisionSystemType::BULLET;
 
 
 
@@ -93,38 +88,44 @@ collision::ChCollisionSystemType collision_type = collision::ChCollisionSystemTy
 void runBallDrop(ChSystemGpuMesh& gpu_sys, ChGpuSimulationParameters& params) {
     // Create a ChronoENGINE physical system
     ChSystemSMC mphysicalSystem;
-    mphysicalSystem.SetCollisionSystemType(collision_type);
+    //mphysicalSystem.SetCollisionSystemType(collision_type);
 
     // Contact material shared among all objects
     auto material = chrono_types::make_shared<ChMaterialSurfaceNSC>();
 
     //RotScale: our case usually 1
     // dimentions from solidworks are like 30 mm but chrono understands it as 30 cm
-    float statorrotscale =0.1;
+    float statorrotscale = 0.1;
     float augur1rotscale = 0.1;
     float augur2rotscale = 0.1;
-
+  /*ChMatrix33<float> a(ChVector<float>(0.1, 0.1,
+   0.1));
+  ChMatrix33<float> s(ChVector<float>(0.1,0.1,
+    0.1));
+  ChMatrix33<float> d(ChVector<float>(0.1, 0.1,
+   0.1));
     //radius for volume calculation:
+    */
     //2.5
-    float stator_radius =0.25;
+    float stator_radius = 0.25;
     float augur1_radius = 0.75;
     float augur2_radius = 0.75;
 
     //height for volume calculation:
     float stator_height = 0.25;
-    float augur1_height =5;
+    float augur1_height = 5;
     float augur2_height = 5;
-   
-    
+
+
     // Density:
     float stator_density = 1 * params.sphere_density;
     float augur1_density = 1 * params.sphere_density;
     float augur2_density = 1 * params.sphere_density;
 
     //MASS
-    float stator_mass = (float)(CH_C_PI * stator_radius * stator_radius * stator_height * stator_density)*1;
-    float augur1_mass = 1*(float)(CH_C_PI * augur1_radius * augur1_radius * augur1_height * augur1_density) * 1;
-    float augur2_mass = 1*(float)(CH_C_PI * augur2_radius * augur2_radius * augur2_height * augur2_density) * 1;
+    float stator_mass = (float)(CH_C_PI * stator_radius * stator_radius * stator_height * stator_density) * 1;
+    float augur1_mass = 1 * (float)(CH_C_PI * augur1_radius * augur1_radius * augur1_height * augur1_density) * 1;
+    float augur2_mass = 1 * (float)(CH_C_PI * augur2_radius * augur2_radius * augur2_height * augur2_density) * 1;
     //inertia
     double stator_inertia = 1.0 / 12.0 * augur1_mass * ((3 * augur1_radius * augur1_radius) + augur1_height * augur1_height);
     double augur1_inertiay = 1.0 / 2.0 * (augur1_mass * augur1_radius * augur1_radius);
@@ -134,46 +135,122 @@ void runBallDrop(ChSystemGpuMesh& gpu_sys, ChGpuSimulationParameters& params) {
     double augur2_inertiax = 1.0 / 12.0 * augur2_mass * ((3 * augur2_radius * augur2_radius) + augur2_height * augur2_height);
     double augur2_inertiaz = augur2_inertiax;
 
-   
-
-   gpu_sys.AddMesh(GetChronoDataFile("models/stator3_2.obj"), ChVector<float>(0), ChMatrix33<float>(statorrotscale),
-       stator_mass);
-   //augur1_2:augur1_s
-   gpu_sys.AddMesh(GetChronoDataFile("models/augur_1_5cm_2.obj"), ChVector<float>(0), ChMatrix33<float>(augur1rotscale),
-       augur1_mass);
-   //augur2:augur2_s
-   gpu_sys.AddMesh(GetChronoDataFile("models/augur_2_5cm_2.obj"), ChVector<float>(0), ChMatrix33<float>(augur2rotscale),
-       augur2_density);
 
 
-   
+    std::vector <string> mesh_filenames;
+    //mesh_filenames.resize(10000);
+    std::vector<ChMatrix33<float>> mesh_rotscales;
+    //mesh_rotscales.resize(1000);
+    std::vector<float3> mesh_translations;
+  // mesh_translations.resize(1000);
+    std::vector<float> mesh_masses;
+    //mesh_masses.resize(1000);
+        std::cout  << " after" << std::endl;
+    mesh_filenames.push_back(std::string(gpu::GetDataFile("stator_blender.obj")));
+    mesh_filenames.push_back(std::string(gpu::GetDataFile("auger1_blender.obj")));
+    mesh_filenames.push_back(std::string(gpu::GetDataFile("auger2_blender.obj")));
+        std::cout  << " after2" << std::endl;
+    mesh_rotscales.push_back( statorrotscale);
+    mesh_rotscales.push_back( augur1rotscale );
+    mesh_rotscales.push_back(augur2rotscale);
+    mesh_translations.push_back(make_float3(0, 0, 0));
+    mesh_translations.push_back(make_float3(0, 0.5 * (stator_height), 0));
+    mesh_translations.push_back(make_float3(0, -0.5 * (stator_height), 0));
+
+    /// define and assign masses
+     std::cout  << " after3" << std::endl;
+    mesh_masses.push_back(stator_mass);
+    mesh_masses.push_back(augur1_mass);
+    mesh_masses.push_back(augur2_mass);
+     std::cout  << " after4" << std::endl;
+       gpu_sys.LoadMeshes(mesh_filenames, mesh_rotscales, mesh_translations,
+                     mesh_masses);
+     
+//////////////////////////////////////////////////
+/* std::string mesh_stator(GetChronoDataFile("stator3_2.obj"));
+  std::vector<string> mesh_filenamestator(1, mesh_stator);
+
+  std::vector<float3> mesh_translationstator(1, make_float3(0.f, 0.f, 0.f));
+
+  std::vector<ChMatrix33<float>> mesh_rotscalestator(1,
+                                                ChMatrix33<float>(0.1));
+
+
+  std::vector<float> mesh_massstator(1, stator_mass);
+
+  gpu_sys.LoadMeshes(mesh_filenamestator, mesh_rotscalestator, mesh_translationstator,
+                     mesh_massstator);
+   //////////////////////////////////////                  
+ std::string mesh_auger1(GetChronoDataFile("augur_1_5cm_2.obj"));
+  std::vector<string> mesh_filenameauger1(1, mesh_auger1);
+
+  std::vector<float3> mesh_translationauger1(1, make_float3(0, 0.5 * (stator_height), 0));
+
+  std::vector<ChMatrix33<float>> mesh_rotscaleauger1(1,
+                                                ChMatrix33<float>(0.1));
+
+
+  std::vector<float> mesh_massauger1(1, augur1_mass);
+
+  gpu_sys.LoadMeshes(mesh_filenameauger1, mesh_rotscaleauger1, mesh_translationauger1,
+                     mesh_massauger1);
+
+//////////////////////////////////////////////////
+ std::string mesh_auger2(GetChronoDataFile("augur_2_5cm_2.obj"));
+  std::vector<string> mesh_filenameauger2(1, mesh_auger2);
+
+  std::vector<float3> mesh_translationauger2(1, make_float3(0, -0.5 * (stator_height), 0));
+
+  std::vector<ChMatrix33<float>> mesh_rotscaleauger2(1,
+                                                ChMatrix33<float>(0.1));
+
+
+  std::vector<float> mesh_massauger2(1, augur2_mass);
+
+  gpu_sys.LoadMeshes(mesh_filenameauger2, mesh_rotscaleauger2, mesh_translationauger2,
+                     mesh_massauger2);
+
+
+
+
+*/
+
+    //gpu_sys.LoadMeshes(mesh_filenames, mesh_rotscales, mesh_translations, mesh_masses);
+
+     std::cout  << " after5" << std::endl;
 
     // One more thing: we need to manually enable mesh in this run, because we disabled it in the settling phase,
     // let's overload that option.
-   gpu_sys.EnableMeshCollision(true);
+    gpu_sys.EnableMeshCollision(true);
+    gpu_sys.SetOutputMode(params.write_mode);
+    gpu_sys.SetVerbosity(params.verbose);
 
-    gpu_sys.Initialize();
     std::cout << gpu_sys.GetNumMeshes() << " meshes" << std::endl;
 
+    /// Initialize the granular system
+    gpu_sys.Initialize();
 
-  
-    ChVector<> positionA3(0, 0,0);
+
+
+
+
+
     mphysicalSystem.Set_G_acc(ChVector<>(0, 0, -980));
-   // Body for Stator1
+    // Body for Stator1
 
     std::shared_ptr<ChBody>stator3(mphysicalSystem.NewBody());
     stator3->SetMass(augur1_mass);
     //-35
-    stator3->SetPos(ChVector<>(0, 0,0));
+    stator3->SetPos(ChVector<>(0, 0, 0));
     //stator3->SetRot(Q_from_AngAxis(CH_C_PI_2, VECT_X));
     stator3->SetBodyFixed(false);
     stator3->SetInertiaXX(ChVector<>(stator_inertia, stator_inertia, stator_inertia));
-    
+
     mphysicalSystem.AddBody(stator3);
 
     // Body for Augur 1, named Rotator 3
     std::shared_ptr<ChBody> rotor3(mphysicalSystem.NewBody());
-    rotor3->SetPos(ChVector<>(0, 0.5* (stator_height), 0));
+    rotor3->SetPos(ChVector<>(0, 0.5 * (stator_height), 0));
     //-35
     rotor3->SetMass(augur1_mass);
     rotor3->SetBodyFixed(false);
@@ -183,7 +260,7 @@ void runBallDrop(ChSystemGpuMesh& gpu_sys, ChGpuSimulationParameters& params) {
     //// Body for Augur 2, named Rotator 2
     std::shared_ptr<ChBody> rotor2(mphysicalSystem.NewBody());
     //-35
-    rotor2->SetPos(ChVector<>(0, -0.5 * (stator_height),0));
+    rotor2->SetPos(ChVector<>(0, -0.5 * (stator_height), 0));
     rotor2->SetMass(augur2_mass);
     rotor2->SetBodyFixed(false);
     rotor2->SetInertiaXX(ChVector<>(augur2_inertiax, augur2_inertiay, augur2_inertiaz));
@@ -201,7 +278,7 @@ void runBallDrop(ChSystemGpuMesh& gpu_sys, ChGpuSimulationParameters& params) {
     //rotmotor3->SetSpindleConstraint(true,true, true, true, false);
     // Create a ChFunction to be used for the ChLinkMotorRotationSpeed
     auto mwspeed =
-        chrono_types::make_shared<ChFunction_Const>(-1*CH_C_PI);  // constant angular speed, in [rad/s], 1PI/s =180°/s
+        chrono_types::make_shared<ChFunction_Const>(-1 * CH_C_PI);  // constant angular speed, in [rad/s], 1PI/s =180°/s
     // Let the motor use this motion function:
     rotmotor1->SetSpeedFunction(mwspeed);
 
@@ -216,7 +293,7 @@ void runBallDrop(ChSystemGpuMesh& gpu_sys, ChGpuSimulationParameters& params) {
     //rotmotor3->SetSpindleConstraint(true,true, true, true, false);
     // Create a ChFunction to be used for the ChLinkMotorRotationSpeed
     auto mwspeed2 =
-        chrono_types::make_shared<ChFunction_Const>(1*CH_C_PI);  // constant angular speed, in [rad/s], 1PI/s =180°/s
+        chrono_types::make_shared<ChFunction_Const>(1 * CH_C_PI);  // constant angular speed, in [rad/s], 1PI/s =180°/s
     // Let the motor use this motion function:
     rotmotor2->SetSpeedFunction(mwspeed2);
 
@@ -226,8 +303,8 @@ void runBallDrop(ChSystemGpuMesh& gpu_sys, ChGpuSimulationParameters& params) {
     rotor3->SetCollide(true);
 
 
-     //Create rigid ball_body simulation
-    //ChSystemSMC sys_cylinder;
+    //Create rigid ball_body simulation
+   //ChSystemSMC sys_cylinder;
     mphysicalSystem.SetContactForceModel(ChSystemSMC::ContactForceModel::Hooke);
     mphysicalSystem.SetTimestepperType(ChTimestepper::Type::EULER_IMPLICIT);
     //mphysicalSystem.Set_G_acc(ChVector<>(0, 0, 0));
@@ -237,11 +314,11 @@ void runBallDrop(ChSystemGpuMesh& gpu_sys, ChGpuSimulationParameters& params) {
 
 
 
-     
 
 
 
- 
+
+
 
 
 
@@ -257,7 +334,8 @@ void runBallDrop(ChSystemGpuMesh& gpu_sys, ChGpuSimulationParameters& params) {
         gpu_vis.Initialize();
     }
 
-    std::string out_dir = GetChronoOutputPath() + "GPU/";
+  // Output directory
+    std::string out_dir = "../";
     filesystem::create_directory(filesystem::path(out_dir));
     out_dir = out_dir + params.output_dir;
     filesystem::create_directory(filesystem::path(out_dir));
@@ -308,35 +386,34 @@ void runBallDrop(ChSystemGpuMesh& gpu_sys, ChGpuSimulationParameters& params) {
     int n = 0;
     ChQuaternion<double> rotme(1, 0, 0, 0);
     gpu_sys.GetNumSDs();
-    
+
 
     //rotor3->SetPos(ChVector <>(0, 0,0));
 
     //mphysicalSystem.Set_G_acc(ChVector<>(0, 0, -980));
     int i = 0;
-    chrono::ChMatrixNM<double, 150, 3> myforceR;
-    chrono::ChMatrixNM<double, 150, 1> myforcexR;
-    chrono::ChMatrixNM<double, 150, 1> myforceyR;
-    chrono::ChMatrixNM<double, 150, 1> myforcezR;
-    chrono::ChMatrixNM<double, 150, 1> PositionxR;
-    chrono::ChMatrixNM<double, 150, 1> PositionyR;
-    chrono::ChMatrixNM<double, 150, 1> PositionzR;
-    chrono::ChMatrixNM<double, 150, 3> mytourqeR;
-    chrono::ChMatrixNM<double, 150, 3> mytourqexR;
-    chrono::ChMatrixNM<double, 150, 3> mytourqeyR;
-    chrono::ChMatrixNM<double, 150, 3> mytourqezR;
-
-    chrono::ChMatrixNM<double, 150, 3> myforceL;
-    chrono::ChMatrixNM<double, 150, 1> myforcexL;
-    chrono::ChMatrixNM<double, 150, 1> myforceyL;
-    chrono::ChMatrixNM<double, 150, 1> myforcezL;
-    chrono::ChMatrixNM<double, 150, 1> PositionxL;
-    chrono::ChMatrixNM<double, 150, 1> PositionyL;
-    chrono::ChMatrixNM<double, 150, 1> PositionzL;
-    chrono::ChMatrixNM<double, 150, 3> mytourqeL;
-    chrono::ChMatrixNM<double, 150, 3> mytourqexL;
-    chrono::ChMatrixNM<double, 150, 3> mytourqeyL;
-    chrono::ChMatrixNM<double, 150, 3> mytourqezL;
+    chrono::ChMatrixNM<double, 81, 3> myforceR;
+    chrono::ChMatrixNM<double, 81, 3> myforcexR;
+    chrono::ChMatrixNM<double, 81, 3> myforceyR;
+    chrono::ChMatrixNM<double, 81, 3> myforcezR;
+    chrono::ChMatrixNM<double, 81, 3> PositionxR;
+    chrono::ChMatrixNM<double, 81, 3> PositionyR;
+    chrono::ChMatrixNM<double, 81, 3> PositionzR;
+    chrono::ChMatrixNM<double, 81, 3> mytourqeR;
+    chrono::ChMatrixNM<double, 81, 3> mytourqexR;
+    chrono::ChMatrixNM<double, 81, 3> mytourqeyR;
+    chrono::ChMatrixNM<double, 81, 3> mytourqezR;
+    chrono::ChMatrixNM<double, 81, 3> myforceL;
+    chrono::ChMatrixNM<double, 81, 3> myforcexL;
+    chrono::ChMatrixNM<double, 81, 3> myforceyL;
+    chrono::ChMatrixNM<double, 81, 3> myforcezL;
+    chrono::ChMatrixNM<double, 81, 3> PositionxL;
+    chrono::ChMatrixNM<double, 81, 3> PositionyL;
+    chrono::ChMatrixNM<double, 81, 3> PositionzL;
+    chrono::ChMatrixNM<double, 81, 3> mytourqeL;
+    chrono::ChMatrixNM<double, 81, 3> mytourqexL;
+    chrono::ChMatrixNM<double, 81, 3> mytourqeyL;
+    chrono::ChMatrixNM<double, 81, 3> mytourqezL;
 
     myforceR.setZero();
     myforcexR.setZero();
@@ -360,24 +437,26 @@ void runBallDrop(ChSystemGpuMesh& gpu_sys, ChGpuSimulationParameters& params) {
     mytourqexL.setZero();
     mytourqeyL.setZero();
     mytourqezL.setZero();
-
- 
+    
+     std::cout  << " after6" << std::endl;
+     
+     //t <= params.time_end
     for (double t = 0; t <= params.time_end; t += iteration_step, curr_step++) {
 
         stator3->SetRot(ChMatrix33 <>(0, ChVector < >(0, 0, 1)));
         //stator3->SetPos_dt(ChVector<>(0, 0, -50));
         //rotor3->SetPos_dt(ChVector<>(0, 0, -50));
         //rotor2->SetPos(ChVector<>(rotor3->GetPos()[0], rotor2->GetPos()[1], rotor3->GetPos()[2]));
-      
+
        // gpu_sys.ApplyMeshMotion(3, stator4->GetPos(), stator4->GetRot(), stator4->GetPos_dt(),
             //stator4->GetWvel_par());
         gpu_sys.ApplyMeshMotion(0, stator3->GetPos(), stator3->GetRot(), stator3->GetPos_dt(),
             stator3->GetWvel_par());
         gpu_sys.ApplyMeshMotion(1, rotor3->GetPos(), rotor3->GetRot(), rotor3->GetPos_dt(),
             rotor3->GetWvel_par());
-       gpu_sys.ApplyMeshMotion(2, rotor2->GetPos(), rotor2->GetRot(), rotor2->GetPos_dt(),
+        gpu_sys.ApplyMeshMotion(2, rotor2->GetPos(), rotor2->GetRot(), rotor2->GetPos_dt(),
             rotor2->GetWvel_par());
-       
+
 
         //rotor3->SetPos(ChVector <> (0,0,1000-35-n*2));
 
@@ -418,17 +497,21 @@ void runBallDrop(ChSystemGpuMesh& gpu_sys, ChGpuSimulationParameters& params) {
         //std::cout << rotor3_force[1] << endl;
 
 
-      
+
 
         if (curr_step % out_steps == 0) {
+            
+             printf("Stator forces: %f, %f, %f\n", stator3_force.x(),stator3_force.y(),
+                    stator3_force.z());
             std::cout << "Output frame " << currframe + 1 << " of " << total_frames << std::endl;
             char filename[100];
             char mesh_filename[100];
-            sprintf(filename, "%s/step180N%06d.csv", out_dir.c_str(), currframe);
-            sprintf(mesh_filename, "%s/step180N%06d_mesh", out_dir.c_str(), currframe++);
-            gpu_sys.WriteParticleFile(std::string(filename));
+            sprintf(filename, "%s/stepp%06d.csv", out_dir.c_str(), currframe);
+            sprintf(mesh_filename, "%s/stepp%06d_mesh", out_dir.c_str(), currframe++);
+            gpu_sys.WriteFile(std::string(filename));
             gpu_sys.WriteMeshes(std::string(mesh_filename));
-            std::cout << "Force: The Right Augur" << endl;
+          
+          std::cout << "Force: The Right Augur" << endl;
             std::cout << rotor3_force[0] << endl;
             std::cout << rotor3_force[1] << endl;
             std::cout << rotor3_force[2] << endl;
@@ -438,21 +521,21 @@ void runBallDrop(ChSystemGpuMesh& gpu_sys, ChGpuSimulationParameters& params) {
             std::cout << stator3_force[2] << endl;
             std::cout << myforceR << endl;
             //one matrix
-            myforceR((i * 3)) = rotor3_force[0];
-            myforceR((i * 3) + 1) = rotor3_force[1];
-            myforceR((i * 3) + 2) = rotor3_force[2];
+            //myforceR((i * 3)) = rotor3_force[0];
+           //myforceR((i * 3) + 1) = rotor3_force[1];
+           //myforceR((i * 3) + 2) = rotor3_force[2];
 
-            mytourqeR((i * 3)) = rotor3_torque[0];
-            mytourqeR((i * 3) + 1) = rotor3_torque[1];
-            mytourqeR((i * 3) + 2) = rotor3_torque[2];
+           //mytourqeR((i * 3)) = rotor3_torque[0];
+            //mytourqeR((i * 3) + 1) = rotor3_torque[1];
+            //mytourqeR((i * 3) + 2) = rotor3_torque[2];
         
-            myforcexR(i) = rotor3_force[0];
-            myforceyR(i) = rotor3_force[1];
-            myforcezR(i) = rotor3_force[2];
+            myforcexR(i,0) = rotor3_force[0];
+            myforceyR(i,0) = rotor3_force[1];
+            myforcezR(i,0) = rotor3_force[2];
 
-            mytourqexR(i) = rotor3_torque[0];
-            mytourqeyR(i) = rotor3_torque[1];
-            mytourqezR(i) = rotor3_torque[2];
+            mytourqexR(i,0) = rotor3_torque[0];
+            mytourqeyR(i,0) = rotor3_torque[1];
+            mytourqezR(i,0) = rotor3_torque[2];
 
 
 
@@ -462,34 +545,34 @@ void runBallDrop(ChSystemGpuMesh& gpu_sys, ChGpuSimulationParameters& params) {
             std::cout << rotor2_force[2] << endl;
             std::cout << myforceL << endl;
             //one matrix
-            myforceL((i * 3)) = rotor2_force[0];
-            myforceL((i * 3) + 1) = rotor2_force[1];
-            myforceL((i * 3) + 2) = rotor2_force[2];
+           // myforceL((i * 3)) = rotor2_force[0];
+            //myforceL((i * 3) + 1) = rotor2_force[1];
+            //myforceL((i * 3) + 2) = rotor2_force[2];
 
 
-            mytourqeL((i * 3)) = rotor2_torque[0];
-            mytourqeL((i * 3) + 1) = rotor2_torque[1];
-            mytourqeL((i * 3) + 2) = rotor2_torque[2];
+           // mytourqeL((i * 3)) = rotor2_torque[0];
+            //mytourqeL((i * 3) + 1) = rotor2_torque[1];
+            //mytourqeL((i * 3) + 2) = rotor2_torque[2];
 
 
-            myforcexL(i) = rotor2_force[0];
-            myforceyL(i) = rotor2_force[1];
-            myforcezL(i) = rotor2_force[2];
+            myforcexL(i,0) = rotor2_force[0];
+            myforceyL(i,0) = rotor2_force[1];
+            myforcezL(i,0) = rotor2_force[2];
 
 
-            mytourqexL(i) = rotor2_torque[0];
-            mytourqeyL(i) = rotor2_torque[1];
-            mytourqezL(i) = rotor2_torque[2];
+            mytourqexL(i,0) = rotor2_torque[0];
+            mytourqeyL(i,0) = rotor2_torque[1];
+            mytourqezL(i,0) = rotor2_torque[2];
 
             std::cout << "Position y:The Right Augur" << endl;
-            PositionyR(i) = rotor3->GetPos()[1];
-            PositionxR(i) = rotor3->GetPos()[0];
-            PositionzR(i) = rotor3->GetPos()[2];
+            PositionyR(i,0) = rotor3->GetPos()[1];
+            PositionxR(i,0) = rotor3->GetPos()[0];
+            PositionzR(i,0) = rotor3->GetPos()[2];
             std::cout << PositionyR << endl;
             std::cout << "Position y:The Left Augur" << endl;
-            PositionyL(i) = rotor2->GetPos()[1];
-            PositionxL(i) = rotor2->GetPos()[0];
-            PositionzL(i) = rotor2->GetPos()[2];
+            PositionyL(i,0) = rotor2->GetPos()[1];
+            PositionxL(i,0) = rotor2->GetPos()[0];
+            PositionzL(i,0) = rotor2->GetPos()[2];
             std::cout << PositionyL << endl;
 
 
@@ -507,263 +590,118 @@ void runBallDrop(ChSystemGpuMesh& gpu_sys, ChGpuSimulationParameters& params) {
             gpu_sys.WriteContactInfoFile(std::string(filename2));
 
             n++;
-            
-        }
+
+
+
+      /* std::ofstream output("Force_stator.csv", std::ios::out | std::ios::binary);
+       std::ostringstream outstrstream;
+         output <<"Fx,Fy,Fz,\n";
+         output << "stator3_force.x(),stator3_force.y(),stator3_force.z()";
+
+         
+         //std::cout <<output.str();
         
+         
+          
+      output.close();
+    
+       */
+
+        }
+
 
         if (render && curr_step % render_steps == 0) {
-            if (gpu_vis.Render())
+           if (gpu_vis.Render())
 
-                break;
+               break;
         }
 
 
 
-        
+
         gpu_sys.AdvanceSimulation(iteration_step);
         mphysicalSystem.DoStepDynamics(iteration_step);
     }
 
 
 
-/////////////////////output to file:
-#include <iostream>
-using std::cerr;
-using std::endl;
-#include <fstream>
-using std::ofstream;
-#include <cstdlib> // for exit function
-// This program output values from an array to a file named example2.dat
+
+    /////////////////////output to file:
+     // Output directory
 
 
-ofstream outdata; // outdata is like cin
-int j; // loop index
-//int num[5] = { 4, 3, 6, 7, 12 }; // list of output values
-
-outdata.open("ForceRightAugur180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << myforceR(j) << endl;
-outdata.close();
-
-outdata.open("ForceRightAugurX180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << myforcexR(j) << endl;
-outdata.close();
-
-outdata.open("ForceRightAugurY180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << myforceyR(j) << endl;
-outdata.close();
-
-outdata.open("FroceRightAugurZ180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << myforcezR(j) << endl;
-outdata.close();
-
-outdata.open("TourqeRightAugurX180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << mytourqexR(j) << endl;
-outdata.close();
-outdata.open("TouqreRightAugurY180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << mytourqeyR(j) << endl;
-outdata.close();
-outdata.open("TouqreRightAugurZ180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << mytourqezR(j) << endl;
-
-outdata.close();
-outdata.open("TouqreRightAugur180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << mytourqeR(j) << endl;
-
-
-outdata.close();
-outdata.open("ForceLeftAugur180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << myforceL(j) << endl;
-outdata.close();
-
-outdata.open("ForceLeftAugurX180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << myforcexL(j) << endl;
-outdata.close();
-
-outdata.open("ForceLeftAugurY180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << myforceyL(j) << endl;
-outdata.close();
-
-outdata.open("ForceLeftAugurZ180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << myforcezL(j) << endl;
-outdata.close();
-
-
-outdata.open("TourqeLeftAugurX720.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << mytourqexL(j) << endl;
-outdata.close();
-outdata.open("TouqreLeftAugurY180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << mytourqeyL(j) << endl;
-outdata.close();
-outdata.open("TouqreLeftAugurZ180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << mytourqezL(j) << endl;
-outdata.close();
-
-///////////////////position
-outdata.open("Right Augur Positionx180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << PositionxR(j) << endl;
-outdata.close();
-outdata.open("Right Augur Positiony180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << PositionyR(j) << endl;
-outdata.close();
-
-outdata.open("Right Augur Positionz180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j <151; ++j)
-    outdata << PositionzR(j) << endl;
-outdata.close();
-
-outdata.open("Left Augur Positionx180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j <151; ++j)
-    outdata << PositionxL(j) << endl;
-outdata.close();
-
-outdata.open("Left Augur Positiony180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j < 151; ++j)
-    outdata << PositionyL(j) << endl;
-outdata.close();
-
-outdata.open("Left Augur Positionz180N.dat"); // opens the file
-if (!outdata) { // file couldn't be opened
-    cerr << "Error: file could not be opened" << endl;
-    exit(1);
-}
-
-for (j = 0; j <151; ++j)
-    outdata << PositionzL(j) << endl;
-outdata.close();
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//////////////////////////////////////////////////////////
+      std::ofstream output("auger_right.csv");
+      //output.open("Force_auger_right.csv");
+       std::ostringstream outstrstream;
+        outstrstream <<"Fx,Fy,Fz,Tx,Ty,Tz,Pz,Py,Pz,\n";
+        for (int j = 0; j <= 79; j++){
+           outstrstream << myforcexR(j,0)<< myforceyR(j,0)<< myforcezR(j,0)<<mytourqexR(j,0)<< mytourqeyR(j,0)<< mytourqezR(j,0)<< PositionxR(j,0)<< PositionyR(j,0)<<PositionzR(j,0);
+          outstrstream <<"\n";
+         // outstrstream<< ;
+          //  outstrstream <<"\n";
+          //   outstrstream <<;
+          //  outstrstream <<"\n";
+        }
+        output<<outstrstream.str();
+      
+      /*std::ofstream output("Force_auger_right.csv");
+      //output.open("Force_auger_right.csv");
+       std::ostringstream outstrstream;
+        outstrstream <<"Fx,Fy,Fz,\n";
+        for (int j = 1; j <= 80; j++){
+           outstrstream << myforcexR(j,1)<< myforceyR(j,1)<< myforceyR(j,1);
+          outstrstream <<"\n";
+        }
+        output<<outstrstream.str();
+          //output.close();
+     
+      std::ofstream output2("Force_auger_left.csv");
+      //output.open("Force_auger_left.csv");
+         outstrstream <<"Fx,Fy,Fz,\n";
+        for (int j = 1; j <= 80; j++){
+           outstrstream << myforcexL(j,1)<< myforceyL(j,1)<< myforceyL(j,1);
+           outstrstream <<"\n";
+        }
+          output<<outstrstream.str();
+          //output.close();
+      std::ofstream output3("Torque_auger_right.csv");
+   //output.open("Torque_auger_right.csv");
+         outstrstream <<"Fx,Fy,Fz,\n";
+        for (int j = 1; j <= 80; j++){
+            outstrstream<< mytourqeR(j,1)<< mytourqeR(j,1)<< mytourqeR(j,1);
+            outstrstream <<"\n";
+        }
+           output<<outstrstream.str();
+          //output.close();
+             std::ofstream output4("Torque_auger_left.csv");
+   //output.open("Torque_auger_left.csv");
+          outstrstream <<"Fx,Fy,Fz,\n";
+        for (int j = 1; j <= 80; j++){
+           outstrstream << mytourqeL(j,1)<< mytourqeL(j,1)<< mytourqeL(j,1);
+           outstrstream <<"\n";
+        }
+           output<<outstrstream.str();
+          //output.close();
+           std::ofstream output5("Position_auger_right.csv");
+   //5output.open("Position_auger_right.csv");
+          outstrstream <<"Fx,Fy,Fz,\n";
+        for (int j = 1; j <= 80; j++){
+            outstrstream << PositionxR(j,1)<< PositionxR(j,1)<<PositionxR(j,1);
+            outstrstream <<"\n";
+        }
+           output<<outstrstream.str();
+          //output.close();
+     std::ofstream output6("Position_auger_left.csv");
+   //output.open("Position_auger_left.csv");
+          outstrstream <<"Fx,Fy,Fz,\n";
+        for (int j = 1; j <= 80; j++){
+           outstrstream<< PositionxL(j,1)<< PositionxL(j,1)<< PositionxL(j,1);
+            outstrstream <<"\n";
+        }
+           output<<outstrstream.str();
+         // output.close();
+*/
+    //////////////////////////////////////////////////////////
 
 
 
@@ -775,9 +713,10 @@ outdata.close();
 }
 
 int main(int argc, char* argv[]) {
+        SetDataPath("../data/");
     ChGpuSimulationParameters params;
     if (argc != 2 || ParseJSON(gpu::GetDataFile(argv[1]), params) == false) {
-        std::cout << "Usage:\n./demo_GPU_ballcosim <json_file>" << std::endl;
+        std::cout << "Usage:\n./mychgpu <json_file>" << std::endl;
         return 1;
     }
 
@@ -787,12 +726,10 @@ int main(int argc, char* argv[]) {
     }
 
     // Output directory
-    std::string out_dir = GetChronoOutputPath() + "GPU/";
+    std::string out_dir = "../";
     filesystem::create_directory(filesystem::path(out_dir));
     out_dir = out_dir + params.output_dir;
     filesystem::create_directory(filesystem::path(out_dir));
-
-    std::string checkpoint_file = out_dir + "/checkpoint.dat";
 
     //if (params.run_mode == 1) {
         // run_mode = 1, this is a restarted run
@@ -805,16 +742,16 @@ int main(int argc, char* argv[]) {
         //ChSystemGpuMesh gpu_sys(checkpoint_file);
 
         // Add a ball through a mesh, whose dynamics are managed by Chrono Core, and run this co-simulation.
-       
+
         //now exits main funtion!!:
-       
-        
+
+
         //return 0;
     //}
 
     // run_mode = 0, this is a newly started run. We have to set all simulation params.
     ChSystemGpuMesh gpu_sys(params.sphere_radius, params.sphere_density,
-                            ChVector<float>(params.box_X, params.box_Y, params.box_Z));
+        make_float3(params.box_X, params.box_Y, params.box_Z));
 
     printf(
         "Now run_mode == 0, this run is particle settling phase.\n"
@@ -841,7 +778,7 @@ int main(int argc, char* argv[]) {
     center.z() += 3 * params.sphere_radius;
     while (center.z() < -0.85) {
         // You can uncomment this line to see a report on particle creation process.
-         std::cout << "Create layer at " << center.z() << std::endl;
+        std::cout << "Create layer at " << center.z() << std::endl;
         auto points = sampler.SampleBox(center, hdims);
         body_points.insert(body_points.end(), points.begin(), points.end());
         center.z() += 2.05 * params.sphere_radius;
@@ -857,7 +794,7 @@ int main(int argc, char* argv[]) {
     }
     std::cout << body_points.size() << " particles sampled!" << std::endl;
 
-    gpu_sys.SetParticles(body_points);
+    gpu_sys.SetParticlePositions(body_points);
 
     gpu_sys.SetKn_SPH2SPH(params.normalStiffS2S);
     gpu_sys.SetKn_SPH2WALL(params.normalStiffS2W);
@@ -893,7 +830,7 @@ int main(int argc, char* argv[]) {
     // gpu_sys.SetRollingCoeff_SPH2WALL(params.rolling_friction_coeffS2W);
     // gpu_sys.SetRollingCoeff_SPH2MESH(params.rolling_friction_coeffS2M);
 
-    gpu_sys.SetParticleOutputMode(params.write_mode);
+    //gpu_sys.SetParticleOutputMode(params.write_mode);
     gpu_sys.SetVerbosity(params.verbose);
     gpu_sys.SetBDFixed(true);
 
@@ -919,8 +856,8 @@ int main(int argc, char* argv[]) {
 
     gpu_sys.setBDWallsMotionFunction(pos_func_wave);
     */
-
-    gpu_sys.Initialize();
+    std::cout  << " before" << std::endl;
+    //gpu_sys.Initialize();
 
     unsigned int out_steps = (unsigned int)(1 / (out_fps * iteration_step));
     unsigned int total_frames = (unsigned int)(params.time_end * out_fps);
@@ -928,42 +865,42 @@ int main(int argc, char* argv[]) {
     int currframee = 0;
     unsigned int curr_step = 0;
 
-
+    std::cout  << " before" << std::endl;
     runBallDrop(gpu_sys, params);
 
 
-  /*  for (double t = 0; t < (double)params.time_end; t += iteration_step, curr_step++) {
-        if (curr_step % out_steps == 0) {
-            std::cout << "Output frame " << currframe + 1 << " of " << total_frames << std::endl;
-            char filename[100];
-            
-            sprintf(filename, "%s/step%06d.csv", out_dir.c_str(), currframe++);
-            gpu_sys.WriteParticleFile(std::string(filename));
+    /*  for (double t = 0; t < (double)params.time_end; t += iteration_step, curr_step++) {
+          if (curr_step % out_steps == 0) {
+              std::cout << "Output frame " << currframe + 1 << " of " << total_frames << std::endl;
+              char filename[100];
+
+              sprintf(filename, "%s/step%06d.csv", out_dir.c_str(), currframe++);
+              gpu_sys.WriteParticleFile(std::string(filename));
 
 
- 
-        }
+
+          }
 
 
-        gpu_sys.AdvanceSimulation(iteration_step);
-    }*/
+          gpu_sys.AdvanceSimulation(iteration_step);
+      }*/
 
 
-   // out_steps = (unsigned int)(1 / (out_fps * iteration_step));
-    //total_frames = (unsigned int)(params.time_end * out_fps);
-    //currframee = 0;
-    //curr_step = 0;
+      // out_steps = (unsigned int)(1 / (out_fps * iteration_step));
+       //total_frames = (unsigned int)(params.time_end * out_fps);
+       //currframee = 0;
+       //curr_step = 0;
 
-    //for (double t = 0; t < (double)params.time_end; t += iteration_step, curr_step++) {
-        //if (curr_step % out_steps == 0) {
-           // char filename2[100];
-            //sprintf(filename2, "%s/contact%06d.csv", out_dir.c_str(), currframee++);
-            //gpu_sys.WriteContactInfoFile(std::string(filename2));
-        //}
-   // }
+       //for (double t = 0; t < (double)params.time_end; t += iteration_step, curr_step++) {
+           //if (curr_step % out_steps == 0) {
+              // char filename2[100];
+               //sprintf(filename2, "%s/contact%06d.csv", out_dir.c_str(), currframee++);
+               //gpu_sys.WriteContactInfoFile(std::string(filename2));
+           //}
+      // }
 
-    // This is settling phase, so output a checkpoint file
-    gpu_sys.WriteCheckpointFile(checkpoint_file);
+       // This is settling phase, so output a checkpoint file
+       //gpu_sys.WriteCheckpointFile(checkpoint_file);
 
     return 0;
 }
